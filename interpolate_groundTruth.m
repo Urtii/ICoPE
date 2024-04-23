@@ -1,4 +1,4 @@
-function groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_)
+function groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_, sampleSize)
     % interpolate_groundTruth - Interpolates ground truth data to match timestamps with IMU data.
     %
     % INPUTS:
@@ -12,7 +12,11 @@ function groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_)
     groundTruth_interp.time_d = imuData.time_d;
 
     %% Initialize and Interpolate ground truth data for IMU
-    numSamples = length(imuData.time_d);
+    if sampleSize == 0
+        numSamples = length(imuData.time_d);
+    else
+        numSamples = sampleSize;
+    end
 
     % Preallocate arrays for interpolated data
     groundTruth_interp.quat = quaternion.zeros(numSamples, 1);
@@ -36,9 +40,9 @@ function groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_)
             groundTruth_interp.quat(i) = slerp(q_before, q_after, t);
         end
     end
-    groundTruth_interp.SE3 = zeros(4, 4, numSamples);
-    groundTruth_interp.SE3(1:3,4,:) = groundTruth_interp.pos.';
-    groundTruth_interp.SE3(1:3,1:3,:) = quat2rotm(groundTruth_interp.quat);
-    groundTruth_interp.SE3(4, 4, :) = 1;
+    % groundTruth_interp.SE3 = zeros(4, 4, numSamples);
+    % groundTruth_interp.SE3(1:3,4,:) = groundTruth_interp.pos.';
+    % groundTruth_interp.SE3(1:3,1:3,:) = quat2rotm(groundTruth_interp.quat);
+    % groundTruth_interp.SE3(4, 4, :) = 1;
     
 end

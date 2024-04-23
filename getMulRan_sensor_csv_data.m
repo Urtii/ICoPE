@@ -75,7 +75,9 @@ function [imuData, gpsData] = getMulRan_sensor_csv_data(imuData_Path, gpsData_Pa
 
     % Read and filter GPS data
     gpsData.LLA = gpsData_csv_data(indices, 2:4);
-    gpsData.velocity = NaN(size(gpsData.LLA));
+    %gpsData.velocity = NaN(size(gpsData.LLA)); %This is the actual line
+    %but it will be used to store LLA covariance
+    gpsData.velocity = gpsData_csv_data(indices, [5 9 13]);
 
     % Set default value for gpsData.LLA (if needed)
     % gpsData.LLA = gpsData.LLA - gpsData.LLA(1, :);
