@@ -1,5 +1,6 @@
 %% Chose Dataset
 clear
+close all
 dataset = 'riverside1/';
 
 %% Get groundTruth Data
@@ -15,12 +16,13 @@ LiDARData = timetable(seconds(LiDAR.time_d),LiDAR.pos, LiDAR.WXYZ, 'VariableName
 world_2_lidarMap_rotmat = rotmat(groundTruth_.quat(1), 'point');
 LiDAR.pos_raw = LiDAR.pos;
 LiDAR.pos = (world_2_lidarMap_rotmat * LiDAR.pos.').';
+LiDAR.counter = 1;
 
 clear world_2_lidarMap_rotmat dataset
 
 
 %% Interpolate Ground Truth wrt. IMU and get table
-groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_, 10);
+groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_, 10,1);
 
 %% Merge sensorData table
 
@@ -61,43 +63,41 @@ dt = seconds(diff(All_sensors.Time));
 numSamples = size(sensorData,1);
 
 %Objects to record trajectory
-kalmanEst = struct;
-kalmanEst.qEst = quaternion.zeros(numSamples,1);
-kalmanEst.posEst = zeros(numSamples,3);
-kalmanEst.covEst = struct;
-kalmanEst.covEst.Orient = zeros(4,4,numSamples);
-kalmanEst.covEst.AngVel = zeros(3,3,numSamples);
-kalmanEst.covEst.Pos = zeros(3,3,numSamples);
-kalmanEst.covEst.Vel = zeros(3,3,numSamples);
-clear numSamples;
+kalmanTrajectory = struct;
+kalmanTrajectory.Quat = quaternion.zeros(numSamples,1);
+kalmanTrajectory.Point = zeros(numSamples,3);
+kalmanTrajectory.Quat_Cov = zeros(numSamples,1);
+kalmanTrajectory.Point_Cov = zeros(3,3,numSamples);
+kalmanTrajectory.counter = 1;
 
-WeightedEst = struct;
-WeightedEst.posEst = zeros(size(LiDARData,1),3);
+numSamples = size(LiDARData,1);
+fusedTrajectory = struct;
+fusedTrajectory.Quat = quaternion.ones(numSamples,1);
+fusedTrajectory.Point = zeros(3,numSamples);
+fusedTrajectory.Quat_Cov = zeros(1,numSamples);
+fusedTrajectory.Point_Cov = zeros(3,3,numSamples);
+fusedTrajectory.counter = 1;
+sK_mean = zeros(4,numSamples);
+sL_mean = zeros(4,numSamples);
+
+clear numSamples;
 
 %Objects to track active pose
 
-kalman_body = struct;
-kalman_body.Pose.Point = zeros(3,1);
-kalman_body.Pose.Point_Cov = zeros(3,3);
-kalman_body.Pose.Quat = quaternion(rotm2quat(eye(3)));
-kalman_body.Pose.Quat_Cov = 0;
-kalman_body.oldPose = kalman_body.Pose;
+kalman_active = struct;
+kalman_active.Pose.Point = zeros(3,1);
+kalman_active.Pose.Point_Cov = eye(3,3);
+kalman_active.Pose.Quat = quaternion.ones(1);
+kalman_active.Pose.Quat_Cov = 1;
+kalman_active.oldPose = kalman_active.Pose;
+kalman_active.Twist = kalman_active.Pose;
 
-LiDAR_body = kalman_body;
-Fused_body = kalman_body;
-
-kalman_enu_pos_old = zeros(1,3);
-kalman_enu_cov_old = eye(3);
-
-kalman_enu_quat_old = quaternion(rotm2quat(eye(3)));
-kalman_quat_cov_old = 1;
-
+LiDAR_active = kalman_active;
+Fused_active = kalman_active;
 
 clear sensorData LiDARData;
 
 % Iterate the filter for prediction and correction using sensor data.
-Kalman_counter = 1;
-LiDAR_counter = 1;
 
 R_ned_to_enu = [0 1 0; 1 0 0; 0 0 -1];
 q_ned_to_enu = quaternion(rotm2quat(R_ned_to_enu));
@@ -111,53 +111,82 @@ for ii=1:size(All_sensors,1)
     insAsyncFilter = fuseINS(insAsyncFilter,All_sensors(ii,:),tuned_params);
 
     % Estimate Position and Orientation
-    [posEst, qEst] = pose(insAsyncFilter);
-    covPosEst = insAsyncFilter.StateCovariance(8:10,8:10);
+    [Point, Quat] = pose(insAsyncFilter);
+    covPoint = insAsyncFilter.StateCovariance(8:10,8:10);
     covQuatEst = det(insAsyncFilter.StateCovariance(1:4,1:4));
 
-    % If INS sensors updated, record kalman prediction
+    % If INS sensors updated, record kalman pose
     if (all(~isnan(All_sensors.Accelerometer(ii,:))) || ...
        all(~isnan(All_sensors.Gyroscope(ii,:)))      || ...
        all(~isnan(All_sensors.Magnetometer(ii,:)))   || ...
        all(~isnan(All_sensors.GPSPosition(ii,:))))
-        kalmanEst.posEst(Kalman_counter,:) = posEst*R_ned_to_enu.'; % = (R*pEst.').'
-        kalmanEst.covEst.Pos(:,:,Kalman_counter) = R_ned_to_enu * covPosEst * R_ned_to_enu;
-
-        Kalman_counter = Kalman_counter + 1;
+        kalmanTrajectory.Point(kalmanTrajectory.counter,:) = Point*R_ned_to_enu.'; % = (R*pEst.').'
+        kalmanTrajectory.Point_Cov(:,:,kalmanTrajectory.counter) = R_ned_to_enu * covPoint * R_ned_to_enu;
+        kalmanTrajectory.Quat(kalmanTrajectory.counter) = q_ned_to_enu*Quat;
+        kalmanTrajectory.Quat_Cov(kalmanTrajectory.counter) = covQuatEst;
+        kalmanTrajectory.counter = kalmanTrajectory.counter + 1;
     end
 
     % If LiDAR updated, merge kalman and LiDAR estimation
     if (all(~isnan(All_sensors.Position(ii,:))))
-        kalman_enu_pos = posEst*R_ned_to_enu.'; % = (R*pEst.').'
-        kalman_enu_pos_diff = kalman_enu_pos - kalman_enu_pos_old;
-        kalman_enu_pos_old = kalman_enu_pos;
-        temp = R_ned_to_enu * covPosEst * R_ned_to_enu;
-        kalman_enu_cov = temp / kalman_enu_cov_old;
-        kalman_enu_cov_old = temp;
+        %Set old poses
+        kalman_active.oldPose = kalman_active.Pose;
+        Fused_active.oldPose = Fused_active.Pose;
+        LiDAR_active.oldPose = LiDAR_active.Pose;
 
-        % kalman_enu_quat = q_ned_to_enu*qEst;
-        % kalman_enu_quat_diff = kalman_enu_quat * conj(kalman_enu_quat_old);
-        % kalman_enu_quat_old = kalman_enu_quat;
-        % kalman_quat_cov = covQuatEst / kalman_enu_cov_old;
-        % kalman_enu_cov_old = covQuatEst;
+        %Update new Poses
+        % Kalman Filter First
+        kalman_active.Pose.Point = R_ned_to_enu*Point.'; % = (R*pEst.').'
+        kalman_active.Pose.Point_Cov = R_ned_to_enu * covPoint * R_ned_to_enu;
+        kalman_active.Pose.Quat = q_ned_to_enu*Quat;
+        kalman_active.Pose.Quat_Cov = covQuatEst;
 
-        if LiDAR_counter == 1
-            lidar_diff = LiDAR.pos(LiDAR_counter,:);
+        kalman_active.Twist.Point = kalman_active.Pose.Point - kalman_active.oldPose.Point;
+        kalman_active.Twist.Point = quatrotate(conj(kalman_active.oldPose.Quat),kalman_active.Twist.Point.').';
+        kalman_active.Twist.Point_Cov = kalman_active.Pose.Point_Cov / kalman_active.oldPose.Point_Cov;
+        kalman_active.Twist.Quat = kalman_active.Pose.Quat * conj(kalman_active.oldPose.Quat);
+        kalman_active.Twist.Quat_Cov = kalman_active.Pose.Quat_Cov / kalman_active.oldPose.Quat_Cov;
 
-            WeightedEst.posEst(LiDAR_counter,:) = ...
-                [(lidar_diff(1) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(1) / kalman_enu_cov(1,1))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(1,1)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(1,1)), ...
-                 (lidar_diff(2) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(2) / kalman_enu_cov(2,2))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(2,2)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(2,2)), ...
-                 (lidar_diff(3) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(3) / kalman_enu_cov(3,3))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(3,3)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(3,3))];
+        % Lidar Second
+        LiDAR_active.Pose.Point = LiDAR.pos(LiDAR.counter,:).';
+        LiDAR_active.Pose.Point_Cov = LiDAR.cov(LiDAR.counter)*eye(3);
+        LiDAR_active.Pose.Quat = LiDAR.quat(LiDAR.counter);
+        LiDAR_active.Pose.Quat_Cov = LiDAR.cov(LiDAR.counter);
+
+        LiDAR_active.Twist.Point = LiDAR_active.Pose.Point - LiDAR_active.oldPose.Point;
+        LiDAR_active.Twist.Point = quatrotate(conj(LiDAR_active.oldPose.Quat),LiDAR_active.Twist.Point.').';
+        LiDAR_active.Twist.Point_Cov = LiDAR_active.Pose.Point_Cov / LiDAR_active.oldPose.Point_Cov;
+        LiDAR_active.Twist.Quat = LiDAR_active.Pose.Quat * conj(LiDAR_active.oldPose.Quat);
+        LiDAR_active.Twist.Quat_Cov = LiDAR_active.Pose.Quat_Cov / LiDAR_active.oldPose.Quat_Cov;
+
+        % Calculate and record Fused Trajectory
+        sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
+        sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
+        sK_mean(:,fusedTrajectory.counter) = sK;
+        sL_mean(:,fusedTrajectory.counter) = sL;
+
+
+        %K*wK + L*wL = F
+        %wL+ wK = 1
+        %wL = sK/(sK+SL)
+        %wK = sL/(sK+sL)
+        %F_body = (K*sL + L*sK)/(sK+sL) 
+        %F_world = qF*F_body
+
+        if fusedTrajectory.counter > 1
+            fusedTrajectory.Point(:,fusedTrajectory.counter) = fusedTrajectory.Point(:,fusedTrajectory.counter-1) + ...
+            quatrotate(fusedTrajectory.Quat(fusedTrajectory.counter-1),...
+                ((kalman_active.Twist.Point.*sL(1:3) + LiDAR_active.Twist.Point.*sK(1:3))  ./  (sK(1:3)+sL(1:3))).').';
+            fusedTrajectory.Quat(fusedTrajectory.counter) = slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-(sL(4)/(sL(4)+sK(4))))*fusedTrajectory.Quat(fusedTrajectory.counter-1);
+            fusedTrajectory.counter = fusedTrajectory.counter + 1;
         else
-            lidar_diff = LiDAR.pos(LiDAR_counter,:) - LiDAR.pos(LiDAR_counter-1,:);
-
-            WeightedEst.posEst(LiDAR_counter,:) = WeightedEst.posEst(LiDAR_counter-1,:) + ...
-                [(lidar_diff(1) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(1) / kalman_enu_cov(1,1))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(1,1)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(1,1)), ...
-                 (lidar_diff(2) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(2) / kalman_enu_cov(2,2))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(2,2)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(2,2)), ...
-                 (lidar_diff(3) / LiDAR.cov(LiDAR_counter) + kalman_enu_pos_diff(3) / kalman_enu_cov(3,3))*LiDAR.cov(LiDAR_counter)*kalman_enu_cov(3,3)/(LiDAR.cov(LiDAR_counter)+kalman_enu_cov(3,3))];
+            fusedTrajectory.Point(:,fusedTrajectory.counter) = ...
+                (kalman_active.Twist.Point.*sL(1:3) + LiDAR_active.Twist.Point.*sK(1:3))  ./  (sK(1:3)+sL(1:3));
+            fusedTrajectory.Quat(fusedTrajectory.counter) = slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-(sL(4)/(sL(4)+sK(4))));
+            fusedTrajectory.counter = fusedTrajectory.counter + 1;
         end
-
-        LiDAR_counter = LiDAR_counter + 1;
+        LiDAR.counter = LiDAR.counter + 1;
+        
     end
 end
 
@@ -165,26 +194,34 @@ end
 
 figure();
 grid on
-plot3(kalmanEst.posEst(:,1),kalmanEst.posEst(:,2),kalmanEst.posEst(:,3), 'b');
+plot3(kalmanTrajectory.Point(:,1),kalmanTrajectory.Point(:,2),kalmanTrajectory.Point(:,3), 'b');
 hold on
 plot3(groundTruth_.pos(:,1),groundTruth_.pos(:,2),groundTruth_.pos(:,3));
 plot3(LiDAR.pos(:,1),LiDAR.pos(:,2),LiDAR.pos(:,3));
-plot3(WeightedEst.posEst(:,1),WeightedEst.posEst(:,2),WeightedEst.posEst(:,3));
-% plot3((gpsData.LLA(:,2)-gpsData.LLA(1,2))*100000,(gpsData.LLA(:,1)-gpsData.LLA(1,1))*100000,(gpsData.LLA(:,3)-gpsData.LLA(1,3)));
-title("Tuned insfilterAsync" + newline + "Euclidean Distance Position Error")
+plot3(fusedTrajectory.Point(1,:),fusedTrajectory.Point(2,:),fusedTrajectory.Point(3,:));
 xlabel('X');
 ylabel('Y');
 zlabel('Z');
 legend('Kalman','GroundTruth','Lidar','Weighted');
 
+figure;
+for i = 1:4
+    % Create new figure
+    subplot(4, 1, i); % 2 rows, 1 column, first subplot
+    plot(sK_mean(i,:));
+    hold on
+    plot(sL_mean(i,:));
+    ylim([0 3])
+end
+
 
 %% Error Estimation
 
-% kalmanEst.posEst = kalmanEst.posEst*R_ned_to_enu.'; % = (R*pEst.').'
-% orientationError = rad2deg(dist(kalmanEst.qEst, groundTruth.Orientation));
+% kalmanTrajectory.Point = kalmanTrajectory.Point*R_ned_to_enu.'; % = (R*pEst.').'
+% orientationError = rad2deg(dist(kalmanTrajectory.Quat, groundTruth.Orientation));
 % rmsorientationError = sqrt(mean(orientationError.^2))
 % 
-% positionError = sqrt(sum((kalmanEst.posEst - groundTruth.Position).^2, 2));
+% positionError = sqrt(sum((kalmanTrajectory.Point - groundTruth.Position).^2, 2));
 % rmspositionError = sqrt(mean( positionError.^2))
 
 %% Plot RMS Error
@@ -207,11 +244,11 @@ legend('Kalman','GroundTruth','Lidar','Weighted');
 
 % figure();
 % grid on
-% plot3(kalmanEst.posEst(:,1),kalmanEst.posEst(:,2),kalmanEst.posEst(:,3), 'b');
+% plot3(kalmanTrajectory.Point(:,1),kalmanTrajectory.Point(:,2),kalmanTrajectory.Point(:,3), 'b');
 % hold on
 % plot3(groundTruth_.pos(:,1),groundTruth_.pos(:,2),groundTruth_.pos(:,3));
 % plot3(LiDAR.pos(:,1),LiDAR.pos(:,2),LiDAR.pos(:,3));
-% plot3(WeightedEst.posEst(:,1),WeightedEst.posEst(:,2),WeightedEst.posEst(:,3));
+% plot3(fusedTrajectory.Point(:,1),fusedTrajectory.Point(:,2),fusedTrajectory.Point(:,3));
 % % plot3((gpsData.LLA(:,2)-gpsData.LLA(1,2))*100000,(gpsData.LLA(:,1)-gpsData.LLA(1,1))*100000,(gpsData.LLA(:,3)-gpsData.LLA(1,3)));
 % title("Tuned insfilterAsync" + newline + "Euclidean Distance Position Error")
 % xlabel('X');
@@ -221,7 +258,7 @@ legend('Kalman','GroundTruth','Lidar','Weighted');
 
 %% Plot 3D Orientation
 
-% n = size(posEst, 1);
+% n = size(Point, 1);
 % axisLength = 20;
 % axisColors = ['r', 'g', 'b']; % Red for X, Green for Y, Blue for Z
 % axisColors_acc = ['m', 'k', 'c']; % Magenta for X, Black for Y, Cyan for Z
@@ -235,8 +272,8 @@ legend('Kalman','GroundTruth','Lidar','Weighted');
 % zlabel('Z');
 % for i = 1:100:n/10
 %     % Current position, orientation, and acceleration
-% %     pos = posEst(i, :);
-%     quat_wb = qEst(i, :);
+% %     pos = Point(i, :);
+%     quat_wb = Quat(i, :);
 %     acc_vec = rotateframe(groundTruth_interp.quat(i), imuData.acc_body(i,:));
 %     pos = groundTruth_interp.pos(i, :);
 % %     quat_wb = groundTruth_interp.quat(i, :);
