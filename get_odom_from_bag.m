@@ -74,24 +74,10 @@ function lidar_odometry = get_odom_from_bag(Path_to_bag,T_start,T_end)
                                  m.Pose.Pose.Orientation.Y, m.Pose.Pose.Orientation.Z], ...
                                  msgs, 'UniformOutput', false);
     lo_.WXYZ = vertcat(orientations{:});
-%     lidar_odometry.quat = quaternion(eul2quat([0,pi/2,-pi/2]))*quaternion(lo_.WXYZ);
-    lidar_odometry.quat = map_to_camera_quat*quaternion(lo_.WXYZ(indices,:))*camera_to_baselink_quat;
+    lidar_odometry.quat = map_to_camera_quat*quatnormalize(quaternion(lo_.WXYZ(indices,:)))*camera_to_baselink_quat;
     [W,X,Y,Z] = parts(lidar_odometry.quat);
     lidar_odometry.WXYZ = [W,X,Y,Z];
     
-%     % YPR Angles
-%     yaw = -pi/2;
-%     pitch = -pi/2;
-%     roll = 0;
-% 
-%     % Rotation matrices
-%     Rz = [cos(yaw) -sin(yaw) 0; sin(yaw) cos(yaw) 0; 0 0 1];
-%     Ry = [cos(pitch) 0 sin(pitch); 0 1 0; -sin(pitch) 0 cos(pitch)];
-%     Rx = [1 0 0; 0 cos(roll) -sin(roll); 0 sin(roll) cos(roll)];
-% 
-%     % Combined rotation matrix
-%     R = Rz * Ry * Rx;
-%     lidar_odometry.pos = lidar_odometry.pos*R.';
     % Extract only the diagonal elements of the position covariance matrix
     diagonalCovariances = cellfun(@(m) m.Pose.Covariance(1).', msgs, 'UniformOutput', false);
     lo_.cov = vertcat(diagonalCovariances{:});

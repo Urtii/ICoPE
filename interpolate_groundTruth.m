@@ -38,13 +38,11 @@ function groundTruth_interp = interpolate_groundTruth(imuData, groundTruth_, sam
                 t = (imuData.time_d(i) - groundTruth_.time_d(beforeIdx)) / (groundTruth_.time_d(afterIdx) - groundTruth_.time_d(beforeIdx));
                 q_before = quaternion(groundTruth_.quat(beforeIdx, :));
                 q_after = quaternion(groundTruth_.quat(afterIdx, :));
-                groundTruth_interp.quat(i) = slerp(q_before, q_after, t);
+                groundTruth_interp.quat(i) = quatnormalize(slerp(q_before, q_after, t));
             end
         end
     end
-    % groundTruth_interp.SE3 = zeros(4, 4, numSamples);
-    % groundTruth_interp.SE3(1:3,4,:) = groundTruth_interp.pos.';
-    % groundTruth_interp.SE3(1:3,1:3,:) = quat2rotm(groundTruth_interp.quat);
-    % groundTruth_interp.SE3(4, 4, :) = 1;
+    [W,X,Y,Z] = parts(groundTruth_interp.quat);
+    groundTruth_interp.WXYZ = [W,X,Y,Z];
     
 end
