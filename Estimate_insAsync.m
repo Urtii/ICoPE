@@ -1,3 +1,4 @@
+
 %% Practices to maintain code
 % All measurement data will be inserted in All_sensors timetable
 % INS Frame of Allsensors table is NED
@@ -15,7 +16,7 @@ close all
 dataset = 'riverside2/';
 
 %% Get groundTruth Data
-groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv'],30000);
+groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv'],5000);
 
 %% Get IMU Data
 [imuData, gpsData] = getMulRan_sensor_csv_data([dataset 'xsens_imu.csv'],[dataset 'gps.csv'],groundTruth_.time_start,groundTruth_.time_end);
@@ -144,7 +145,39 @@ for ii=1:size(All_sensors,1)
         fused_active.oldPose = fused_active.Pose;
         LiDAR_active.oldPose = LiDAR_active.Pose;
 
-        if Counter > 1
+        if Counter == 1
+
+            % In first iteration align sensors with Ground Truth
+            fused_active.Pose.Point = All_sensors.GT_Position(ii,:).';
+            % fused_active.Pose.Quat = quaternion(All_sensors.GT_Orientation(ii,:));
+            fused_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
+
+            init_state_quat = q_ned_from_enu*fused_active.Pose.Quat;
+            [W,X,Y,Z] = parts(init_state_quat);
+            init_state_pos = R_ned_from_enu*fused_active.Pose.Point;
+            init_state_vel = init_state_pos/seconds(All_sensors.Time(7));
+            initialState = [W;X;Y;Z;0;0;0;init_state_pos;init_state_vel;zeros(15,1)];
+
+            correct(insAsyncFilter,1:1:28,initialState,insAsyncFilter.StateCovariance);
+
+
+            [kalman_Point, kalman_Quat] = pose(insAsyncFilter);
+            kalman_active.Pose.Point = R_ned_from_enu*kalman_Point.';
+            kalman_active.Pose.Point_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(8:10,8:10)*R_ned_from_enu.';
+            kalman_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
+            kalman_active.Pose.Quat_Cov = det(insAsyncFilter.StateCovariance(1:4,1:4));
+
+            kalman_active = get_body_transform(kalman_active);
+
+            % Lidar Second
+            LiDAR_active.Pose.Point = All_sensors.LiDAR_Position(ii,:).';
+            LiDAR_active.Pose.Point_Cov = All_sensors.LiDAR_Cov(ii,:)*eye(3);
+            LiDAR_active.Pose.Quat = quaternion(All_sensors.LiDAR_Orientation(ii,:));
+            LiDAR_active.Pose.Quat_Cov = All_sensors.LiDAR_Cov(ii,:);
+
+            LiDAR_active = get_body_transform(LiDAR_active);
+
+        elseif Counter > 1
 
             % Estimate Position and Orientation
             kalman_active.Pose.Point = R_ned_from_enu*kalman_Point.';
@@ -163,18 +196,18 @@ for ii=1:size(All_sensors,1)
             LiDAR_active = get_body_transform(LiDAR_active);
 
             % Calculate and record Fused Position and Orientation
-            sL = [1 1 1 1];
-            sK = [0 0 0 0];
+            % sL = [1 1 1 1];
+            % sK = [0 0 0 0];
             % sK = [diag(kalman_active.Twist.Point_Cov); 0];
             % sL = [diag(LiDAR_active.Twist.Point_Cov); 1];
-            % sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
-            % sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
-            % for i = 1:4
-            %     if (sK(i)<0.5); sK(i) = 0.5; end
-            %     if (sL(i)<0.5); sL(i) = 0.5; end
-            %     if (sK(i)>2); sK(i) = 2; end
-            %     if (sL(i)>2); sL(i) = 2; end
-            % end
+            sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
+            sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
+            for i = 1:4
+                if (sK(i)<0.5); sK(i) = 0.5; end
+                if (sL(i)<0.5); sL(i) = 0.5; end
+                if (sK(i)>2); sK(i) = 2; end
+                if (sL(i)>2); sL(i) = 2; end
+            end
 
             %K*wK + L*wL = F
             %wL+ wK = 1
@@ -190,27 +223,6 @@ for ii=1:size(All_sensors,1)
                 ((diag(sL(1:3))*kalman_active.Twist.Point) + (diag(sK(1:3))*LiDAR_active.Twist.Point)));
             fused_active.Pose.Quat = fused_active.oldPose.Quat * ...
                 slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-(sL(4)/(sL(4)+sK(4))));
-        else
-
-            % In first iteration align sensors with Ground Truth
-            fused_active.Pose.Point = All_sensors.GT_Position(ii,:).';
-            fused_active.Pose.Quat = quaternion(All_sensors.GT_Orientation(ii,:));
-
-            [kalman_Point, kalman_Quat] = pose(insAsyncFilter);
-            kalman_active.Pose.Point = R_ned_from_enu*kalman_Point.';
-            kalman_active.Pose.Point_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(8:10,8:10)*R_ned_from_enu.';
-            kalman_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
-            kalman_active.Pose.Quat_Cov = det(insAsyncFilter.StateCovariance(1:4,1:4));
-
-            kalman_active = get_body_transform(kalman_active);
-
-            % Lidar Second
-            LiDAR_active.Pose.Point = All_sensors.LiDAR_Position(ii,:).';
-            LiDAR_active.Pose.Point_Cov = All_sensors.LiDAR_Cov(ii,:)*eye(3);
-            LiDAR_active.Pose.Quat = quaternion(All_sensors.LiDAR_Orientation(ii,:));
-            LiDAR_active.Pose.Quat_Cov = All_sensors.LiDAR_Cov(ii,:);
-
-            LiDAR_active = get_body_transform(LiDAR_active);
 
         end
         
@@ -254,8 +266,8 @@ close all
 ff = figure();
 
 % Plot each trajectory on the same figure with orientations
-step_size = 100000;
-vectorLength = 0.05;
+step_size = 100;
+vectorLength = 1;
 plot_trajectory_with_orientation(ff, kalmanTrajectory, step_size, vectorLength, 'Kalman', 'b');
 hold on;
 plot_trajectory_with_orientation(ff, groundTruthTrajectory, step_size, vectorLength, 'Ground Truth', 'r');
