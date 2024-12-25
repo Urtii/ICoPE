@@ -106,6 +106,11 @@ kalman_active.Pose.Point = zeros(3,1);
 kalman_active.Pose.Point_Cov = eye(3,3);
 kalman_active.Pose.Quat = quaternion.ones(1);
 kalman_active.Pose.Quat_Cov = 1;
+       
+kalman_active.Pose.Vel_Cov = zeros(3); % Current position covariance matrix
+kalman_active.Pose.Acc_Cov = zeros(3); % Current position covariance matrix
+kalman_active.Pose.angvel_Cov = 0;
+
 kalman_active.oldPose = kalman_active.Pose;
 kalman_active.Twist = kalman_active.Pose;
 
@@ -164,8 +169,12 @@ for ii=1:size(All_sensors,1)
             [kalman_Point, kalman_Quat] = pose(insAsyncFilter);
             kalman_active.Pose.Point = R_ned_from_enu*kalman_Point.';
             kalman_active.Pose.Point_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(8:10,8:10)*R_ned_from_enu.';
+            kalman_active.Pose.Vel_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(11:13,11:13)*R_ned_from_enu.';
+            kalman_active.Pose.Acc_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(14:16,14:16)*R_ned_from_enu.';
             kalman_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
             kalman_active.Pose.Quat_Cov = det(insAsyncFilter.StateCovariance(1:4,1:4));
+            kalman_active.Pose.angvel_Cov = det(insAsyncFilter.StateCovariance(5:7,5:7));
+            kalman_active.Pose.Time = seconds(All_sensors.Time(ii));
 
             kalman_active = get_body_transform(kalman_active);
 
@@ -174,6 +183,7 @@ for ii=1:size(All_sensors,1)
             LiDAR_active.Pose.Point_Cov = All_sensors.LiDAR_Cov(ii,:)*eye(3);
             LiDAR_active.Pose.Quat = quaternion(All_sensors.LiDAR_Orientation(ii,:));
             LiDAR_active.Pose.Quat_Cov = All_sensors.LiDAR_Cov(ii,:);
+            LiDAR_active.Pose.Time = seconds(All_sensors.Time(ii));
 
             LiDAR_active = get_body_transform(LiDAR_active);
 
@@ -182,18 +192,26 @@ for ii=1:size(All_sensors,1)
             % Estimate Position and Orientation
             kalman_active.Pose.Point = R_ned_from_enu*kalman_Point.';
             kalman_active.Pose.Point_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(8:10,8:10)*R_ned_from_enu.';
+            kalman_active.Pose.Vel_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(11:13,11:13)*R_ned_from_enu.';
+            kalman_active.Pose.Acc_Cov = R_ned_from_enu*insAsyncFilter.StateCovariance(14:16,14:16)*R_ned_from_enu.';
             kalman_active.Pose.Quat = conj(q_ned_from_enu) * kalman_Quat;
             kalman_active.Pose.Quat_Cov = det(insAsyncFilter.StateCovariance(1:4,1:4));
+            kalman_active.Pose.angvel_Cov = det(insAsyncFilter.StateCovariance(5:7,5:7));
+            kalman_active.Pose.Time = seconds(All_sensors.Time(ii));
 
-            kalman_active = get_body_transform(kalman_active);
+            kalman_active = get_body_transform(kalman_active,dt(ii-1));
 
             % Lidar Second
             LiDAR_active.Pose.Point = All_sensors.LiDAR_Position(ii,:).';
             LiDAR_active.Pose.Point_Cov = All_sensors.LiDAR_Cov(ii,:)*eye(3);
+            LiDAR_active.Pose.Vel_Cov = zeros(3);
+            LiDAR_active.Pose.Acc_Cov = zeros(3);
             LiDAR_active.Pose.Quat = quaternion(All_sensors.LiDAR_Orientation(ii,:));
             LiDAR_active.Pose.Quat_Cov = All_sensors.LiDAR_Cov(ii,:);
+            LiDAR_active.Pose.angvel_Cov = 0;
+            LiDAR_active.Pose.Time = seconds(All_sensors.Time(ii));
 
-            LiDAR_active = get_body_transform(LiDAR_active);
+            LiDAR_active = get_body_transform(LiDAR_active,dt(ii-1));
 
             % Calculate and record Fused Position and Orientation
             % sL = [1 1 1 1];
