@@ -16,7 +16,7 @@ close all
 dataset = 'riverside2/';
 
 %% Get groundTruth Data
-groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv'],5000);
+groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv']);
 
 %% Get IMU Data
 [imuData, gpsData] = getMulRan_sensor_csv_data([dataset 'xsens_imu.csv'],[dataset 'gps.csv'],groundTruth_.time_start,groundTruth_.time_end);
@@ -76,7 +76,7 @@ tuned_params.GPSPositionNoise = eye(3)*[mean(gpsData.Cov(1,1,:)); ...
                                      mean(gpsData.Cov(3,3,:))];
 
 clear sensorData_GPS sensorData_imu LiDARData groundTruthData gpsData ...
-    groundTruth_ groundTruth_interp_LiDAR imuData LiDAR
+    groundTruth_interp_LiDAR imuData LiDAR
 clear W X Y Z init_state_vel initialState imuData groundTruth_interp;
 
 %% Estimate Result
@@ -202,12 +202,14 @@ for ii=1:size(All_sensors,1)
             % sL = [diag(LiDAR_active.Twist.Point_Cov); 1];
             sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
             sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
-            for i = 1:4
-                if (sK(i)<0.5); sK(i) = 0.5; end
-                if (sL(i)<0.5); sL(i) = 0.5; end
-                if (sK(i)>2); sK(i) = 2; end
-                if (sL(i)>2); sL(i) = 2; end
-            end
+            % for i = 1:4
+            %     % if (sK(i)<0.5); sK(i) = 0.5; end
+            %     % if (sL(i)<0.5); sL(i) = 0.5; end
+            %     % if (sK(i)>2); sK(i) = 2; end
+            %     % if (sL(i)>2); sL(i) = 2; end
+            %     sK(i) = 1;
+            %     sL(i) = 0;
+            % end
 
             %K*wK + L*wL = F
             %wL+ wK = 1
@@ -222,7 +224,7 @@ for ii=1:size(All_sensors,1)
                 Fused_R_body_from_world * ((diag(sK(1:3)+sL(1:3))) \ ...
                 ((diag(sL(1:3))*kalman_active.Twist.Point) + (diag(sK(1:3))*LiDAR_active.Twist.Point)));
             fused_active.Pose.Quat = fused_active.oldPose.Quat * ...
-                slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-(sL(4)/(sL(4)+sK(4))));
+                slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-min(max(sL(4)/(sL(4)+sK(4)),0),1));
 
         end
         
@@ -262,22 +264,65 @@ end
 %% Plot Position 3D
 %
 
-close all
-ff = figure();
+% close all
+% ff = figure();
+% 
+% % Plot each trajectory on the same figure with orientations
+% step_size = 100;
+% vectorLength = 1;
+% plot_trajectory_with_orientation(ff, kalmanTrajectory, step_size, vectorLength, 'Kalman', 'b');
+% hold on;
+% plot_trajectory_with_orientation(ff, groundTruthTrajectory, step_size, vectorLength, 'Ground Truth', 'r');
+% hold on;
+% plot_trajectory_with_orientation(ff, LiDARTrajectory, step_size, vectorLength, 'Lidar', 'g');
+% hold on;
+% plot_trajectory_with_orientation(ff, fusedTrajectory, step_size, vectorLength, 'Fused', 'm');
+% hold off;
+% 
+% xlabel('X');
+% ylabel('Y');
+% zlabel('Z');
+% legend
 
-% Plot each trajectory on the same figure with orientations
-step_size = 100;
-vectorLength = 1;
-plot_trajectory_with_orientation(ff, kalmanTrajectory, step_size, vectorLength, 'Kalman', 'b');
-hold on;
-plot_trajectory_with_orientation(ff, groundTruthTrajectory, step_size, vectorLength, 'Ground Truth', 'r');
-hold on;
-plot_trajectory_with_orientation(ff, LiDARTrajectory, step_size, vectorLength, 'Lidar', 'g');
-hold on;
-plot_trajectory_with_orientation(ff, fusedTrajectory, step_size, vectorLength, 'Fused', 'm');
-hold off;
+figure()
+hold on
+plot(kalmanTrajectory.Point(1,:),kalmanTrajectory.Point(2,:))
+plot(groundTruthTrajectory.Point(1,:),groundTruthTrajectory.Point(2,:))
+plot(LiDARTrajectory.Point(1,:),LiDARTrajectory.Point(2,:))
+plot(fusedTrajectory.Point(1,:),fusedTrajectory.Point(2,:))
+% 
+% figure()
+% x = subplot(3,1,1);
+% hold on
+% plot(kalmanTrajectory.Time,kalmanTrajectory.Point(1,:))
+% plot(groundTruthTrajectory.Time,groundTruthTrajectory.Point(1,:))
+% plot(LiDARTrajectory.Time,LiDARTrajectory.Point(1,:))
+% plot(fusedTrajectory.Time,fusedTrajectory.Point(1,:))
+% 
+% y = subplot(3,1,2);
+% hold on
+% plot(kalmanTrajectory.Time,kalmanTrajectory.Point(2,:))
+% plot(groundTruthTrajectory.Time,groundTruthTrajectory.Point(2,:))
+% plot(LiDARTrajectory.Time,LiDARTrajectory.Point(2,:))
+% plot(fusedTrajectory.Time,fusedTrajectory.Point(2,:))
+% 
+% z = subplot(3,1,3);
+% hold on
+% plot(kalmanTrajectory.Time,kalmanTrajectory.Point(3,:))
+% plot(groundTruthTrajectory.Time,groundTruthTrajectory.Point(3,:))
+% plot(LiDARTrajectory.Time,LiDARTrajectory.Point(3,:))
+% plot(fusedTrajectory.Time,fusedTrajectory.Point(3,:))
+% 
+% groundTruthTrajectory.Time = uint64(groundTruthTrajectory.Time * 1e9) + groundTruth_.time_start;
+% kalmanTrajectory.Time = uint64(kalmanTrajectory.Time * 1e9) + groundTruth_.time_start;
+% LiDARTrajectory.Time = uint64(LiDARTrajectory.Time * 1e9) + groundTruth_.time_start;
+% fusedTrajectory.Time = uint64(fusedTrajectory.Time * 1e9) + groundTruth_.time_start;
+% 
+% linkaxes([x y z],'x')
 
-xlabel('X');
-ylabel('Y');
-zlabel('Z');
-legend
+%%
+
+writeStructToTUMFormat(groundTruthTrajectory,"./traj_out/groundTruthTrajectory.txt");
+writeStructToTUMFormat(kalmanTrajectory,"./traj_out/kalmanTrajectory.txt");
+writeStructToTUMFormat(LiDARTrajectory,"./traj_out/LiDARTrajectory.txt");
+writeStructToTUMFormat(fusedTrajectory,"./traj_out/fusedTrajectory.txt");

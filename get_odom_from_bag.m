@@ -81,6 +81,6 @@ function lidar_odometry = get_odom_from_bag(Path_to_bag,T_start,T_end)
     % Extract only the diagonal elements of the position covariance matrix
     diagonalCovariances = cellfun(@(m) m.Pose.Covariance(1).', msgs, 'UniformOutput', false);
     lo_.cov = vertcat(diagonalCovariances{:});
-    lidar_odometry.cov = sqrt(lo_.cov(indices));
+    lidar_odometry.cov = cumsum(lo_.cov(indices));
                                  
 end

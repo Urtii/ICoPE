@@ -8,6 +8,7 @@ function struct_active = get_body_transform(struct_active)
     currentPoint = struct_active.Pose.Point.';  % Transpose to match required vector orientation
     currentQuat = struct_active.Pose.Quat;      % Current orientation as a quaternion
     currentPointCov = struct_active.Pose.Point_Cov; % Current position covariance matrix
+    oldPointCov = struct_active.oldPose.Point_Cov; % Current position covariance matrix
 
     oldPoint = struct_active.oldPose.Point.';   % Transpose to match required vector orientation
     oldQuat = struct_active.oldPose.Quat;       % Previous orientation as a quaternion
@@ -26,11 +27,12 @@ function struct_active = get_body_transform(struct_active)
     % Create a rotation matrix from the conjugate of the old quaternion
     R = quat2rotm(conj(oldQuat));               % Rotation matrix from old orientation
     % Transform the covariance matrix
-    transformedPosCov = R * currentPointCov * R'; % Rotate the position covariance matrix into the old body frame
+    transformedPosCov = R * currentPointCov * R' - oldPointCov; % Rotate the position covariance matrix into the old body frame
 
     % 4. Transform orientation covariance to old body frame
     % Assuming orientation covariance is scalar and ratio reflects the relative uncertainty
-    transformedQuatCov = struct_active.Pose.Quat_Cov / struct_active.oldPose.Quat_Cov; 
+
+    transformedQuatCov = struct_active.Pose.Quat_Cov - struct_active.oldPose.Quat_Cov; 
 
     % Update the struct with the new calculated values
     struct_active.Twist.Point = deltaPos.';     % Update struct with transformed position change
