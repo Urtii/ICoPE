@@ -8,9 +8,9 @@ function struct_active = get_body_transform(struct_active, dt)
     if exist('dt', 'var')
         dt = struct_active.Pose.Time -struct_active.oldPose.Time;
 
-        Fv = 2*dt*eye(3);
-        Fa = dt*dt*eye(3);
-        Fqv = 2*dt;
+        Fv = dt^2*eye(3);
+        Fa = dt^4/4*eye(3);
+        Fqv = dt^2;
        
         oldVelCov = struct_active.oldPose.Vel_Cov; % Current position covariance matrix
         oldAccCov = struct_active.oldPose.Acc_Cov; % Current position covariance matrix
@@ -47,14 +47,24 @@ function struct_active = get_body_transform(struct_active, dt)
 
     % 3. Transform position covariance to old body frame
     % Create a rotation matrix from the conjugate of the old quaternion
-    R = quat2rotm(conj(oldQuat));               % Rotation matrix from old orientation
+    R = quat2rotm(oldQuat);               % Rotation matrix from old orientation
     % Transform the covariance matrix
-    transformedPosCov = R * currentPointCov * R' - oldPointCov;% - oldVelCov*Fv;% - oldAccCov*Fa; % Rotate the position covariance matrix into the old body frame
-
+    if(struct_active.type=="lidar")
+        transformedPosCov = currentPointCov - oldPointCov; % Rotate the position covariance matrix into the old body frame
+        transformedQuatCov = struct_active.Pose.Quat_Cov - struct_active.oldPose.Quat_Cov - old_angvel_Cov*Fqv; 
+    elseif(struct_active.type=="kalman")
+        [Q, Lambda] = eig(currentPointCov - oldPointCov);
+        Lambda = max(zeros(3),Lambda);
+        transformedPosCov = (Q*Lambda*Q' + R' * oldVelCov * R*Fv + R' * oldAccCov* R * Fa + R' * eye(3)*1e-6 *R)/2;% + eye(3)*1e-6; % Rotate the position covariance matrix into the old body frame
+        
+        [Q, Lambda] = eig(struct_active.Pose.Quat_Cov - struct_active.oldPose.Quat_Cov);
+        Lambda = max(zeros(3),Lambda);
+        transformedQuatCov = (Q*Lambda*Q' + old_angvel_Cov * Fqv)/2; 
+    else
+        'error'
+    end
     % 4. Transform orientation covariance to old body frame
     % Assuming orientation covariance is scalar and ratio reflects the relative uncertainty
-
-    transformedQuatCov = struct_active.Pose.Quat_Cov - struct_active.oldPose.Quat_Cov;% - old_angvel_Cov*Fqv; 
 
     % Update the struct with the new calculated values
     struct_active.Twist.Point = deltaPos.';     % Update struct with transformed position change

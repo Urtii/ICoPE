@@ -1,4 +1,4 @@
-
+clear data_log
 %% Practices to maintain code
 % All measurement data will be inserted in All_sensors timetable
 % INS Frame of Allsensors table is NED
@@ -13,13 +13,14 @@
 %% Chose Dataset
 clear
 close all
-dataset = 'riverside2/';
-
+dataset = 'DCC2/';
 %% Get groundTruth Data
 groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv']);
 
 %% Get IMU Data
 [imuData, gpsData] = getMulRan_sensor_csv_data([dataset 'xsens_imu.csv'],[dataset 'gps.csv'],groundTruth_.time_start,groundTruth_.time_end);
+% Downsample GPS
+gpsData = downsample_GPS(gpsData, 5);
 
 %% Get LiDAR Odometry Data and timeTable
 LiDAR = get_odom_from_bag([dataset 'clean_odom.bag'],groundTruth_.time_start,groundTruth_.time_end);
@@ -41,7 +42,7 @@ LiDARData = timetable(seconds(LiDAR.time_d),LiDAR.pos, LiDAR.WXYZ, LiDAR.cov, 'V
                        {'LiDAR_Position','LiDAR_Orientation', 'LiDAR_Cov'});
 numSamples = size(LiDARData,1);
 
-clear world_2_lidarMap_rotmat dataset W X Y Z
+clear world_2_lidarMap_rotmat W X Y Z
 
 %% Merge Timetable
 
@@ -96,8 +97,9 @@ fusedTrajectory.counter = 1;
 kalmanTrajectory = fusedTrajectory;
 groundTruthTrajectory = fusedTrajectory;
 LiDARTrajectory = fusedTrajectory;
+globalFuseTrajectory = fusedTrajectory;
 
-clear numSamples;
+%clear numSamples;
 
 %Objects to track active pose
 
@@ -106,6 +108,7 @@ kalman_active.Pose.Point = zeros(3,1);
 kalman_active.Pose.Point_Cov = eye(3,3);
 kalman_active.Pose.Quat = quaternion.ones(1);
 kalman_active.Pose.Quat_Cov = 1;
+kalman_active.type = "kalman";
        
 kalman_active.Pose.Vel_Cov = zeros(3); % Current position covariance matrix
 kalman_active.Pose.Acc_Cov = zeros(3); % Current position covariance matrix
@@ -115,11 +118,22 @@ kalman_active.oldPose = kalman_active.Pose;
 kalman_active.Twist = kalman_active.Pose;
 
 LiDAR_active = kalman_active;
+LiDAR_active.type = "lidar";
 fused_active = kalman_active;
 fused_active.Pose.Point = zeros(3,1);
 fused_active.Pose.Quat = quaternion.ones(1);
+fused_active.type = "fused";
+
+global_active = fused_active;
+global_active.type = "global";
 
 clear sensorData LiDARData;
+
+global data_log;
+data_log.global = zeros(4,numSamples);
+data_log.local = zeros(4,numSamples);
+data_log.kalman = zeros(4,numSamples);
+data_log.lidar = zeros(4,numSamples);
 
 
 %% Algorithm
@@ -156,6 +170,7 @@ for ii=1:size(All_sensors,1)
             fused_active.Pose.Point = All_sensors.GT_Position(ii,:).';
             % fused_active.Pose.Quat = quaternion(All_sensors.GT_Orientation(ii,:));
             fused_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
+            global_active = fused_active;
 
             init_state_quat = q_ned_from_enu*fused_active.Pose.Quat;
             [W,X,Y,Z] = parts(init_state_quat);
@@ -218,16 +233,27 @@ for ii=1:size(All_sensors,1)
             % sK = [0 0 0 0];
             % sK = [diag(kalman_active.Twist.Point_Cov); 0];
             % sL = [diag(LiDAR_active.Twist.Point_Cov); 1];
-            sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
-            sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
-            % for i = 1:4
-            %     % if (sK(i)<0.5); sK(i) = 0.5; end
-            %     % if (sL(i)<0.5); sL(i) = 0.5; end
-            %     % if (sK(i)>2); sK(i) = 2; end
-            %     % if (sL(i)>2); sL(i) = 2; end
-            %     sK(i) = 1;
-            %     sL(i) = 0;
-            % end
+            sK = real(sqrt([diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov]));
+            sL = real(sqrt([diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov]));
+            % sK = [diag(kalman_active.Twist.Point_Cov); kalman_active.Twist.Quat_Cov];
+            % sL = [diag(LiDAR_active.Twist.Point_Cov); LiDAR_active.Twist.Quat_Cov];
+
+            
+            gK = real(sqrt([diag(kalman_active.Pose.Point_Cov); kalman_active.Pose.Quat_Cov]));
+            gL = real(sqrt([diag(LiDAR_active.Pose.Point_Cov); LiDAR_active.Pose.Quat_Cov]));
+            for i = 1:4
+                if (sK(i)<0); sK(i) = 0; end
+                if (sL(i)<0); sL(i) = 0; end
+                % if (sK(i)>2); sK(i) = 2; end
+                % if (sL(i)>2); sL(i) = 2; end
+                % sK(i) = 1;
+                % sL(i) = 0;
+            end
+
+            data_log.global(:,Counter) = gK ./ (gK+gL);
+            data_log.local(:,Counter) = sK ./ (sK+sL);
+            data_log.kalman(:,Counter) = sK;
+            data_log.lidar(:,Counter) = sL;
 
             %K*wK + L*wL = F
             %wL+ wK = 1
@@ -243,6 +269,12 @@ for ii=1:size(All_sensors,1)
                 ((diag(sL(1:3))*kalman_active.Twist.Point) + (diag(sK(1:3))*LiDAR_active.Twist.Point)));
             fused_active.Pose.Quat = fused_active.oldPose.Quat * ...
                 slerp(kalman_active.Twist.Quat,LiDAR_active.Twist.Quat,1-min(max(sL(4)/(sL(4)+sK(4)),0),1));
+
+            %global inverse cov sensor fusion
+            global_active.Pose.Point = ((diag(gK(1:3)+gL(1:3))) \ ...
+                ((diag(gL(1:3))*kalman_active.Pose.Point) + (diag(gK(1:3))*LiDAR_active.Pose.Point)));
+            global_active.Pose.Quat = ...
+                slerp(kalman_active.Pose.Quat,LiDAR_active.Pose.Quat,1-min(max(gL(4)/(gL(4)+gK(4)),0),1));
 
         end
         
@@ -269,12 +301,20 @@ for ii=1:size(All_sensors,1)
         fusedTrajectory.Quat(Counter) = fused_active.Pose.Quat;
         % fusedTrajectory.Quat_Cov(Counter) = fused_active.Pose.Quat_Cov;
         fusedTrajectory.Time(Counter) = seconds(All_sensors.Time(ii));
+        
+
+        globalFuseTrajectory.Point(:,Counter) = global_active.Pose.Point;
+        % globalFuseTrajectory.Point_Cov(:,Counter) = global_active.Pose.Point_Cov;
+        globalFuseTrajectory.Quat(Counter) = global_active.Pose.Quat;
+        % globalFuseTrajectory.Quat_Cov(Counter) = global_active.Pose.Quat_Cov;
+        globalFuseTrajectory.Time(Counter) = seconds(All_sensors.Time(ii));
 
 
         groundTruthTrajectory.counter = groundTruthTrajectory.counter + 1;
         kalmanTrajectory.counter = kalmanTrajectory.counter + 1;
         LiDARTrajectory.counter = LiDARTrajectory.counter + 1;
         fusedTrajectory.counter = fusedTrajectory.counter + 1;
+        globalFuseTrajectory.counter = globalFuseTrajectory.counter + 1;
 
     end
 end
@@ -282,32 +322,81 @@ end
 %% Plot Position 3D
 %
 
-% close all
-% ff = figure();
-% 
-% % Plot each trajectory on the same figure with orientations
-% step_size = 100;
-% vectorLength = 1;
-% plot_trajectory_with_orientation(ff, kalmanTrajectory, step_size, vectorLength, 'Kalman', 'b');
-% hold on;
-% plot_trajectory_with_orientation(ff, groundTruthTrajectory, step_size, vectorLength, 'Ground Truth', 'r');
-% hold on;
-% plot_trajectory_with_orientation(ff, LiDARTrajectory, step_size, vectorLength, 'Lidar', 'g');
-% hold on;
-% plot_trajectory_with_orientation(ff, fusedTrajectory, step_size, vectorLength, 'Fused', 'm');
-% hold off;
-% 
-% xlabel('X');
-% ylabel('Y');
-% zlabel('Z');
-% legend
+close all
+ff = tiledlayout(1, 1, 'TileSpacing', 'Compact', 'Padding', 'Compact');
+title(ff, strcat(dataset(1:end-1), " Veriseti 3B Odometri Sonucu "), ...
+      'Interpreter', 'none', 'FontName', 'Arial Unicode MS'); % Explicit font and interpreter
+nexttile;
 
-figure()
-hold on
-plot(kalmanTrajectory.Point(1,:),kalmanTrajectory.Point(2,:))
-plot(groundTruthTrajectory.Point(1,:),groundTruthTrajectory.Point(2,:))
-plot(LiDARTrajectory.Point(1,:),LiDARTrajectory.Point(2,:))
-plot(fusedTrajectory.Point(1,:),fusedTrajectory.Point(2,:))
+% Plot each trajectory on the same figure with orientations
+step_size = 100000;
+vectorLength = 0;
+plot_trajectory_with_orientation(ff, kalmanTrajectory, step_size, vectorLength, 'Kalman', 'b');
+hold on;
+plot_trajectory_with_orientation(ff, groundTruthTrajectory, step_size, vectorLength, 'Ground Truth', 'r');
+hold on;
+plot_trajectory_with_orientation(ff, LiDARTrajectory, step_size, vectorLength, 'Lidar', 'g');
+hold on;
+plot_trajectory_with_orientation(ff, fusedTrajectory, step_size, vectorLength, 'Dönüşüm Ortalama', 'm');
+hold on;
+plot_trajectory_with_orientation(ff, globalFuseTrajectory, step_size, vectorLength, 'Global Ortalama', 'k');
+hold off;
+
+xlabel('X (m)');
+ylabel('Y (m)');
+zlabel('Z (m)');
+legend
+
+
+% Exporting the figure as a PDF using 'print' for full font embedding
+set(gcf, 'PaperPositionMode', 'auto'); % Ensure the saved figure matches the on-screen display
+print(gcf, strcat(dataset,'3B_plot.pdf'), '-dpdf', '-bestfit'); % Save as PDF with embedded fonts
+
+%% Plot Position 2D & Time
+%
+
+close all
+fff = tiledlayout(1, 1, 'TileSpacing', 'Compact', 'Padding', 'Compact');
+title(fff, strcat(dataset(1:end-1), " Veriseti Kuş Bakışı Odometri Sonucu"), ...
+      'Interpreter', 'none', 'FontName', 'Arial Unicode MS'); % Explicit font and interpreter
+nexttile;
+
+% Plot each trajectory on the same figure with orientations
+step_size = 100000;
+vectorLength = 0;
+plot_trajectory_with_time(kalmanTrajectory, 'Kalman', 'b');
+hold on;
+plot_trajectory_with_time(groundTruthTrajectory, 'Ground Truth', 'r');
+hold on;
+plot_trajectory_with_time(LiDARTrajectory, 'Lidar', 'g');
+hold on;
+plot_trajectory_with_time(fusedTrajectory, 'Dönüşüm Ortalama', 'm');
+hold on;
+plot_trajectory_with_time(globalFuseTrajectory, 'Global Ortalama', 'k');
+hold off;
+view([0 90])
+set(gca,'DataAspectRatio',[1 1 1])
+
+xlabel('X (m)');
+ylabel('Y (m)');
+zlabel('Zaman (dk)');
+legend('Location','best')
+
+
+% Exporting the figure as a PDF using 'print' for full font embedding
+set(gcf, 'PaperPositionMode', 'auto'); % Ensure the saved figure matches the on-screen display
+print(gcf, strcat(dataset,'2BT_plot.pdf'), '-dpdf', '-bestfit'); % Save as PDF with embedded fonts
+
+% figure()
+% hold on
+% plot(kalmanTrajectory.Point(1,:),kalmanTrajectory.Point(2,:))
+% plot(groundTruthTrajectory.Point(1,:),groundTruthTrajectory.Point(2,:))
+% plot(LiDARTrajectory.Point(1,:),LiDARTrajectory.Point(2,:))
+% plot(fusedTrajectory.Point(1,:),fusedTrajectory.Point(2,:))
+% plot(globalFuseTrajectory.Point(1,:),globalFuseTrajectory.Point(2,:))
+% legend('kalmanTrajectory','groundTruthTrajectory','LiDARTrajectory','fusedTrajectory','globalFuseTrajectory')
+
+%%
 % 
 % figure()
 % x = subplot(3,1,1);
@@ -338,9 +427,18 @@ plot(fusedTrajectory.Point(1,:),fusedTrajectory.Point(2,:))
 % 
 % linkaxes([x y z],'x')
 
+
+save_weight_plots(dataset,data_log.local,"Dönüşüm",groundTruthTrajectory.Time);
+save_weight_plots(dataset,data_log.global,"Global",groundTruthTrajectory.Time);
+save_spectrum_plots(dataset,data_log.local,"Dönüşüm",groundTruthTrajectory.Time);
+save_spectrum_plots(dataset,data_log.global,"Global",groundTruthTrajectory.Time);
+
 %%
 
-writeStructToTUMFormat(groundTruthTrajectory,"./traj_out/groundTruthTrajectory.txt");
-writeStructToTUMFormat(kalmanTrajectory,"./traj_out/kalmanTrajectory.txt");
-writeStructToTUMFormat(LiDARTrajectory,"./traj_out/LiDARTrajectory.txt");
-writeStructToTUMFormat(fusedTrajectory,"./traj_out/fusedTrajectory.txt");
+writeStructToTUMFormat(groundTruthTrajectory,"./"+dataset+"traj_out/groundTruthTrajectory.txt");
+writeStructToTUMFormat(kalmanTrajectory,"./"+dataset+"traj_out/kalmanTrajectory.txt");
+writeStructToTUMFormat(LiDARTrajectory,"./"+dataset+"traj_out/LiDARTrajectory.txt");
+writeStructToTUMFormat(fusedTrajectory,"./"+dataset+"traj_out/fusedTrajectory.txt");
+writeStructToTUMFormat(globalFuseTrajectory,"./"+dataset+"traj_out/globalFuseTrajectory.txt");
+
+

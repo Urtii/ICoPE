@@ -1,4 +1,4 @@
-function plot_trajectory_with_orientation(ff, st, step, vectorLength, dispName, color)
+function plot_trajectory_with_time(st, dispName, color)
 %PLOT_TRAJECTORY_WITH_ORIENTATION Plots the trajectory and body orientations.
 %
 %   PLOT_TRAJECTORY_WITH_ORIENTATION(ff, st, step, vectorLength, color) plots the trajectory of 3D body positions 
@@ -18,11 +18,6 @@ function plot_trajectory_with_orientation(ff, st, step, vectorLength, dispName, 
 %   Outputs:
 %   A plot displayed in the figure identified by 'ff'.
 
-% Validate input step
-if ~isnumeric(step) || step <= 0
-    error('Step must be a positive integer.');
-end
-
 % Check struct fields
 if ~isfield(st, 'Point') || ~isfield(st, 'Quat')
     error('Input struct must contain fields ''Point'' and ''Quat''.');
@@ -37,7 +32,7 @@ end
 % figure(ff);
 
 % Plot trajectory
-plot3(st.Point(1, :), st.Point(2, :), st.Point(3, :), 'DisplayName', dispName, 'Color', color);
+plot3(st.Point(1, :), st.Point(2, :), st.Time, 'DisplayName', dispName, 'Color', color);
 hold on;
 
 % Label axes for clarity
@@ -45,26 +40,6 @@ hold on;
 % ylabel('Y');
 % zlabel('Z');
 % title('3D Body Trajectory and Orientations');
-
-% Plot orientation vectors at specified steps
-for i = 1:step:length(st.Quat)
-    % Extract the current point and quaternion
-    pt = st.Point(:, i);
-    quat = st.Quat(i, :);
-
-    % Calculate the rotation matrix from quaternion
-    R = quat2rotm(quat);
-
-    % Define body axes vectors in local frame (assuming unit vectors)
-    x_body = R(:, 1) * vectorLength;
-    y_body = R(:, 2) * vectorLength;
-    z_body = R(:, 3) * vectorLength;
-
-    % Plot vectors from the current point
-    quiver3(pt(1), pt(2), pt(3), x_body(1), x_body(2), x_body(3), 'r', 'LineWidth', 2,'HandleVisibility','off');
-    quiver3(pt(1), pt(2), pt(3), y_body(1), y_body(2), y_body(3), 'g', 'LineWidth', 2,'HandleVisibility','off');
-    quiver3(pt(1), pt(2), pt(3), z_body(1), z_body(2), z_body(3), 'b', 'LineWidth', 2,'HandleVisibility','off');
-end
 
 % hold off;
 
