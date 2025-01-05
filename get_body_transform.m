@@ -61,14 +61,17 @@ function struct_active = get_body_transform(struct_active, dt)
         Lambda = max(zeros(3),Lambda);
         transformedQuatCov = (Q*Lambda*Q' + old_angvel_Cov * Fqv)/2; 
     else
-        'error'
+        transformedPosCov = zeros(3); % Rotate the position covariance matrix into the old body frame
+        transformedQuatCov = 0; 
     end
     % 4. Transform orientation covariance to old body frame
     % Assuming orientation covariance is scalar and ratio reflects the relative uncertainty
 
     % Update the struct with the new calculated values
     struct_active.Twist.Point = deltaPos.';     % Update struct with transformed position change
-    struct_active.Twist.Point_Cov = transformedPosCov; % Update struct with transformed position covariance
     struct_active.Twist.Quat = deltaQuat;       % Update struct with calculated orientation change
-    struct_active.Twist.Quat_Cov = transformedQuatCov(1); % Update struct with transformed orientation covariance
+    if(struct_active.type ~= "uncorrected")
+        struct_active.Twist.Point_Cov = transformedPosCov; % Update struct with transformed position covariance
+        struct_active.Twist.Quat_Cov = transformedQuatCov(1); % Update struct with transformed orientation covariance
+    end
 end

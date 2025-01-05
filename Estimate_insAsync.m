@@ -13,7 +13,7 @@ clear data_log
 %% Chose Dataset
 clear
 close all
-dataset = 'DCC2/';
+dataset = 'riverside3/';
 %% Get groundTruth Data
 groundTruth_ = getMulRan_groundTruth([dataset 'global_pose.csv']);
 
@@ -98,6 +98,7 @@ kalmanTrajectory = fusedTrajectory;
 groundTruthTrajectory = fusedTrajectory;
 LiDARTrajectory = fusedTrajectory;
 globalFuseTrajectory = fusedTrajectory;
+CorrectedTrajectory = fusedTrajectory;
 
 %clear numSamples;
 
@@ -127,6 +128,11 @@ fused_active.type = "fused";
 global_active = fused_active;
 global_active.type = "global";
 
+corrected_active = fused_active;
+corrected_active.type = "corrected";
+uncorrected_active = fused_active;
+corrected_active.type = "uncorrected";
+
 clear sensorData LiDARData;
 
 global data_log;
@@ -137,6 +143,8 @@ data_log.lidar = zeros(4,numSamples);
 
 
 %% Algorithm
+
+GPS_correction = false;
 
 for ii=1:size(All_sensors,1)
     if ii ~= 1
@@ -150,6 +158,11 @@ for ii=1:size(All_sensors,1)
        all(~isnan(All_sensors.GPSPosition(ii,:))))
         % Fuse INS sensors
         insAsyncFilter = fuseINS(insAsyncFilter,All_sensors(ii,:),tuned_params);
+
+        if(all(~isnan(All_sensors.GPSPosition(ii,:))))
+            GPS_correction = true;
+        end
+
     end
 
     [kalman_Point, kalman_Quat] = pose(insAsyncFilter);
@@ -171,6 +184,8 @@ for ii=1:size(All_sensors,1)
             % fused_active.Pose.Quat = quaternion(All_sensors.GT_Orientation(ii,:));
             fused_active.Pose.Quat = conj(q_ned_from_enu)*kalman_Quat;
             global_active = fused_active;
+            corrected_active = fused_active;
+            uncorrected_active = global_active;
 
             init_state_quat = q_ned_from_enu*fused_active.Pose.Quat;
             [W,X,Y,Z] = parts(init_state_quat);
@@ -275,6 +290,20 @@ for ii=1:size(All_sensors,1)
                 ((diag(gL(1:3))*kalman_active.Pose.Point) + (diag(gK(1:3))*LiDAR_active.Pose.Point)));
             global_active.Pose.Quat = ...
                 slerp(kalman_active.Pose.Quat,LiDAR_active.Pose.Quat,1-min(max(gL(4)/(gL(4)+gK(4)),0),1));
+            if GPS_correction
+                corrected_active = global_active;
+                corrected_active.oldPose = global_active.Pose;
+                uncorrected_active.oldPose = fused_active.Pose;
+                GPS_correction = false;
+            else
+                uncorrected_active.Pose = fused_active.Pose;
+                uncorrected_active = get_body_transform(uncorrected_active);
+                corrected_last_R_body_from_world = quat2rotm(corrected_active.oldPose.Quat);
+                corrected_active.Pose.Point = corrected_active.oldPose.Point + ...
+                    corrected_last_R_body_from_world * uncorrected_active.Twist.Point;
+                corrected_active.Pose.Quat = corrected_active.oldPose.Quat * ...
+                    uncorrected_active.Twist.Quat;
+            end
 
         end
         
@@ -308,6 +337,13 @@ for ii=1:size(All_sensors,1)
         globalFuseTrajectory.Quat(Counter) = global_active.Pose.Quat;
         % globalFuseTrajectory.Quat_Cov(Counter) = global_active.Pose.Quat_Cov;
         globalFuseTrajectory.Time(Counter) = seconds(All_sensors.Time(ii));
+        
+
+        CorrectedTrajectory.Point(:,Counter) = corrected_active.Pose.Point;
+        % globalFuseTrajectory.Point_Cov(:,Counter) = global_active.Pose.Point_Cov;
+        CorrectedTrajectory.Quat(Counter) = corrected_active.Pose.Quat;
+        % globalFuseTrajectory.Quat_Cov(Counter) = global_active.Pose.Quat_Cov;
+        CorrectedTrajectory.Time(Counter) = seconds(All_sensors.Time(ii));
 
 
         groundTruthTrajectory.counter = groundTruthTrajectory.counter + 1;
@@ -315,6 +351,7 @@ for ii=1:size(All_sensors,1)
         LiDARTrajectory.counter = LiDARTrajectory.counter + 1;
         fusedTrajectory.counter = fusedTrajectory.counter + 1;
         globalFuseTrajectory.counter = globalFuseTrajectory.counter + 1;
+        CorrectedTrajectory.counter = CorrectedTrajectory.counter + 1;
 
     end
 end
@@ -340,6 +377,8 @@ hold on;
 plot_trajectory_with_orientation(ff, fusedTrajectory, step_size, vectorLength, 'Dönüşüm Ortalama', 'm');
 hold on;
 plot_trajectory_with_orientation(ff, globalFuseTrajectory, step_size, vectorLength, 'Global Ortalama', 'k');
+hold on;
+plot_trajectory_with_orientation(ff, CorrectedTrajectory, step_size, vectorLength, 'Düzeltmeli Ortalama', 'c');
 hold off;
 
 xlabel('X (m)');
@@ -373,6 +412,8 @@ hold on;
 plot_trajectory_with_time(fusedTrajectory, 'Dönüşüm Ortalama', 'm');
 hold on;
 plot_trajectory_with_time(globalFuseTrajectory, 'Global Ortalama', 'k');
+hold on;
+plot_trajectory_with_time(CorrectedTrajectory, 'Düzeltmeli Ortalama', 'c');
 hold off;
 view([0 90])
 set(gca,'DataAspectRatio',[1 1 1])
@@ -440,5 +481,6 @@ writeStructToTUMFormat(kalmanTrajectory,"./"+dataset+"traj_out/kalmanTrajectory.
 writeStructToTUMFormat(LiDARTrajectory,"./"+dataset+"traj_out/LiDARTrajectory.txt");
 writeStructToTUMFormat(fusedTrajectory,"./"+dataset+"traj_out/fusedTrajectory.txt");
 writeStructToTUMFormat(globalFuseTrajectory,"./"+dataset+"traj_out/globalFuseTrajectory.txt");
+writeStructToTUMFormat(CorrectedTrajectory,"./"+dataset+"traj_out/CorrectedTrajectory.txt");
 
 
